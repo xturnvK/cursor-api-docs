@@ -391,7 +391,7 @@ let apis = [];
 
 async function init() {
   try {
-    const resp = await fetch('apis.json?t=' + Date.now());
+    const resp = await fetch('data/apis.json?t=' + Date.now());
     const raw = await resp.json();
     // Add unique id and flatten groups
     apis = raw.map((a, i) => ({
