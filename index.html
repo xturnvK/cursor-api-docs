@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CURSOR API 文档</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="header">
+  <div id="header-left">
+    <button id="menu-toggle" onclick="toggleSidebar()">☰</button>
+    <h1>📡 CURSOR API</h1>
+  </div>
+  <div id="search-box">
+    <input type="text" id="search" placeholder="搜索 API 名称、路径..." oninput="handleSearch(this.value)" autocomplete="off">
+    <div id="search-results" class="dropdown"></div>
+  </div>
+  <select id="filter" onchange="handleFilter(this.value)">
+    <option value="">全部分类</option>
+  </select>
+</header>
+
+<div id="app">
+  <nav id="sidebar"></nav>
+  <main id="content">
+    <div id="welcome" class="welcome">
+      <h2>CURSOR API 接口文档</h2>
+      <p>共 <span id="total-apis">0</span> 个接口，覆盖 聊天(Chat) · 绘画模型 · 视频模型 · 音乐 · GPTs · 系统API 等平台</p>
+      <div id="quick-categories" class="quick-cats"></div>
+      <div id="api-list" class="api-list"></div>
+    </div>
+    <div id="api-detail" class="api-detail" style="display:none;"></div>
+  </main>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+// ===== 工具函数 =====
+const METHOD_COLORS = { GET: '#3498db', POST: '#27ae60', PUT: '#e67e22', DELETE: '#e74c3c', PATCH: '#9b59b6' };
+
+function escHtml(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+// ===== 侧边栏 =====
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.body.classList.toggle('sidebar-open');
+}
+
+// ===== 路由 =====
+function navigateToApi(id) {
+  document.getElementById('welcome').style.display = 'none';
+  document.getElementById('api-detail').style.display = 'block';
+  document.getElementById('api-detail').innerHTML = renderApiDetail(id);
+  window.scrollTo(0, 0);
+  if (window.innerWidth < 768) {
+    document.getElementById('sidebar').classList.remove('open');
+    document.body.classList.remove('sidebar-open');
+  }
+}
+
+function navigateToWelcome() {
+  document.getElementById('welcome').style.display = 'block';
+  document.getElementById('api-detail').style.display = 'none';
+  window.scrollTo(0, 0);
+}
+
+// ===== 搜索 =====
+function handleSearch(query) {
+  const dd = document.getElementById('search-results');
+  if (!query || query.trim().length < 1) { dd.innerHTML = ''; return; }
+  
+  const q = query.toLowerCase().trim();
+  const matches = apis.filter(a =>
+    a.name.toLowerCase().includes(q) ||
+    a.path.toLowerCase().includes(q) ||
+    a.description.toLowerCase().includes(q) ||
+    a.group.toLowerCase().includes(q)
+  ).slice(0, 15);
+  
+  if (matches.length === 0) { dd.innerHTML = '<div class="search-empty">无匹配结果</div>'; return; }
+  
+  dd.innerHTML = matches.map(a => `
+    <div class="search-item" onclick="navigateToApi('${a._id}'); document.getElementById('search').value=''; document.getElementById('search-results').innerHTML='';">
+      <span class="method-badge ${a.method}">${a.method}</span>
+      <div>
+        <div class="search-item-name">${highlight(a.name, query)}</div>
+        <div class="search-item-path">${highlight(a.path, query)}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function highlight(text, query) {
+  if (!text) return '';
+  const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  return text.replace(regex, '<mark>$1</mark>');
+}
+
+// ===== 筛选 =====
+const GROUP_MAP = {
+  '中转站': '🔀 中转站',
+  '聊天': '💬 聊天(Chat)',
+  '绘画模型': '🎨 绘画模型',
+  '视频模型': '🎬 视频模型',
+  'GPTs': '🤖 GPTs 相关',
+  '系统API': '⚙️ 系统API',
+  'Suno': '🎵 文生音乐 Suno',
+  'Rerank': '🔄 Rerank',
+  '可灵': '🎭 可灵 Kling',
+  'Replicate': '📦 Replicate',
+  'MiniMax': '🟣 MiniMax',
+  'Vidu': '🔴 Vidu',
+  'Fal': '⚡ Fal-ai',
+  '配置方式': '📝 配置方式',
+  '教程': '📖 使用教程',
+  '帮助中心': '❓ 帮助中心',
+};
+
+function handleFilter(cat) {
+  renderApiList(cat);
+}
+
+// ===== 渲染 API 列表 =====
+function renderApiList(category) {
+  const list = document.getElementById('api-list');
+  let filtered = category ? apis.filter(a => a.group.includes(category)) : apis;
+  
+  if (filtered.length === 0) {
+    list.innerHTML = '<div class="empty">无数据</div>';
+    return;
+  }
+  
+  // Group by first-level category
+  const grouped = {};
+  filtered.forEach(a => {
+    const firstGroup = a.group.split('/')[0] || '其他';
+    if (!grouped[firstGroup]) grouped[firstGroup] = [];
+    grouped[firstGroup].push(a);
+  });
+  
+  let html = '';
+  for (const [cat, apisInCat] of Object.entries(grouped)) {
+    const displayName = GROUP_MAP[cat] || cat;
+    html += `<div class="cat-section">
+      <h3 class="cat-header">${escHtml(displayName)} <span class="cat-count">${apisInCat.length}</span></h3>
+      <div class="cat-apis">`;
+    
+    apisInCat.forEach(a => {
+      html += `<div class="api-card" onclick="navigateToApi('${a._id}')">
+        <span class="method-badge ${a.method}">${a.method}</span>
+        <div class="api-card-info">
+          <div class="api-card-name">${escHtml(a.name)}</div>
+          <div class="api-card-path">${escHtml(a.path)}</div>
+        </div>
+        <span class="arrow">→</span>
+      </div>`;
+    });
+    
+    html += '</div></div>';
+  }
+  
+  list.innerHTML = html;
+}
+
+// ===== 渲染 Quick Categories =====
+function renderQuickCategories() {
+  const container = document.getElementById('quick-categories');
+  const cats = [...new Set(apis.map(a => a.group.split('/')[0]))];
+  container.innerHTML = cats.map(c => `
+    <button class="cat-btn" onclick="handleFilter('${c}')">${GROUP_MAP[c] || c}</button>
+  `).join('');
+}
+
+// ===== 渲染侧边栏 =====
+function renderSidebar() {
+  const nav = document.getElementById('sidebar');
+  
+  // Build hierarchical tree
+  const tree = {};
+  apis.forEach(a => {
+    let obj = tree;
+    const parts = a.group.split('/');
+    for (let i = 0; i < parts.length - 1; i++) {
+      const part = GROUP_MAP[parts[i]] || parts[i];
+      if (!obj[part]) obj[part] = { _api: [], _children: {} };
+      obj = obj[part]._children;
+    }
+    const lastPart = GROUP_MAP[parts[parts.length-1]] || parts[parts.length-1];
+    if (!obj[lastPart]) obj[lastPart] = { _api: [], _children: {} };
+    obj[lastPart]._api.push(a);
+  });
+  
+  function renderTree(obj, level=0) {
+    let html = '';
+    for (const [name, data] of Object.entries(obj)) {
+      const hasChildren = Object.keys(data._children).length > 0;
+      const hasApis = data._api.length > 0;
+      
+      html += `<div class="sidebar-item" style="padding-left:${level * 12}px">`;
+      if (hasChildren) {
+        html += `<div class="sidebar-group" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none';this.querySelector('.icon').textContent=this.querySelector('.icon').textContent==='▶'?'▼':'▶'">
+          <span class="icon">▶</span> ${escHtml(name)} <span class="sidebar-count">(${data._api.length})</span>
+        </div>`;
+        html += '<div class="sidebar-children">';
+        html += renderTree(data._children, level + 1);
+        html += '</div>';
+      } else if (hasApis) {
+        data._api.forEach(a => {
+          html += `<div class="sidebar-link" onclick="navigateToApi('${a._id}')">
+            <span class="method-badge ${a.method}">${a.method}</span> ${escHtml(a.name)}
+          </div>`;
+        });
+      }
+      html += '</div>';
+    }
+    return html;
+  }
+  
+  nav.innerHTML = renderTree(tree);
+}
+
+// ===== 渲染 API 详情 =====
+function renderApiDetail(id) {
+  const a = apis.find(x => x._id === id);
+  if (!a) return '<div class="empty">API 不存在</div>';
+  
+  const color = METHOD_COLORS[a.method] || '#666';
+  
+  let html = `
+    <div class="api-header">
+      <button class="back-btn" onclick="navigateToWelcome()">← 返回</button>
+      <div class="api-header-main">
+        <h2>${escHtml(a.name)}</h2>
+        <div class="api-meta">
+          <span class="method-badge ${a.method}" style="background:${color}">${a.method}</span>
+          <code class="path">${escHtml(a.path)}</code>
+        </div>
+      </div>
+    </div>
+    
+    ${a.description ? `<div class="api-desc"><p>${escHtml(a.description)}</p></div>` : ''}
+  `;
+  
+  // 参数 Tabs
+  const hasParams = Object.keys(a.params).some(k => a.params[k].length > 0);
+  const hasBody = a.body_props.length > 0;
+  const hasResponse = a.response_schema;
+  const hasExample = a.response_example;
+  
+  if (hasParams || hasBody || hasResponse || hasExample) {
+    html += '<div class="detail-tabs">';
+    
+    // Tab headers
+    let tabHeaders = '';
+    let tabContent = '';
+    let tabIdx = 0;
+    
+    if (hasParams) {
+      const allParams = [...(a.params.header||[]), ...(a.params.query||[]), ...(a.params.path||[]), ...(a.params.cookie||[])];
+      if (allParams.length > 0) {
+        tabHeaders += `<button class="tab-btn active" onclick="switchTab(this, 'tab-params-${tabIdx}')">参数 (${allParams.length})</button>`;
+        tabContent += `<div class="tab-panel active" id="tab-params-${tabIdx}"><table class="param-table">
+          <thead><tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>`;
+        allParams.forEach(p => {
+          tabContent += `<tr>
+            <td class="param-name">${escHtml(p.name)}</td>
+            <td class="param-type">${escHtml(p.type)}</td>
+            <td class="${p.required?'required':''}">${p.required?'<span class="req">必填</span>':''}</td>
+            <td class="param-desc">${escHtml(p.description) || '<span class="empty-text">-</span>'}</td>
+          </tr>`;
+        });
+        tabContent += '</tbody></table></div>';
+        tabIdx++;
+      }
+    }
+    
+    if (hasBody) {
+      tabHeaders += `<button class="tab-btn ${hasParams?'':'active'}" onclick="switchTab(this, 'tab-body-${tabIdx}')">请求体 (${a.body_props.length})</button>`;
+      tabContent += `<div class="tab-panel ${hasParams?'':'active'}" id="tab-body-${tabIdx}"><table class="param-table">
+        <thead><tr><th>字段名</th><th>类型</th><th>必填</th><th>说明</th></tr></thead><tbody>`;
+      a.body_props.forEach(p => {
+        const nestedHtml = p.nested && p.nested.length > 0 ? 
+          `<div class="nested-props">${p.nested.map(np => `
+            <div class="nested-row">
+              <span class="param-name">↳ ${escHtml(np.name)}</span>
+              <span class="param-type">${escHtml(np.type)}</span>
+              ${np.required?'<span class="req">必填</span>':''}
+              <span class="param-desc">${escHtml(np.description)?.substring(0,80)}${np.description?.length>80?'...':''}</span>
+            </div>`).join('')}</div>` : '';
+        tabContent += `<tr>
+          <td class="param-name">${escHtml(p.name)}${p.required?'<span class="req">*</span>':''}</td>
+          <td class="param-type">${escHtml(p.type)}</td>
+          <td class="${p.required?'required':''}">${p.required?'<span class="req">必填</span>':''}</td>
+          <td class="param-desc"><div>${escHtml(p.description) || '<span class="empty-text">-</span>'}</div>${nestedHtml}</td>
+        </tr>`;
+      });
+      tabContent += '</tbody></table></div>';
+      tabIdx++;
+    }
+    
+    if (hasResponse || hasExample) {
+      tabHeaders += `<button class="tab-btn ${hasParams||hasBody?'':'active'}" onclick="switchTab(this, 'tab-response-${tabIdx}')">响应</button>`;
+      tabContent += `<div class="tab-panel ${hasParams||hasBody?'':'active'}" id="tab-response-${tabIdx}">`;
+      if (hasExample && a.response_example) {
+        tabContent += '<h4 class="example-title">示例响应</h4>';
+        tabContent += `<pre class="json-block"><code>${escapeJson(a.response_example)}</code></pre>
+          <button class="copy-btn" onclick="copyText(this, \`${escapeForJs(a.response_example)}\`)">📋 复制</button>`;
+      }
+      if (hasResponse) {
+        tabContent += '<h4 class="example-title">响应结构</h4>';
+        const respSchema = a.response_schema;
+        if (respSchema && respSchema.properties) {
+          tabContent += '<table class="param-table">';
+          tabContent += '<thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead><tbody>';
+          for (const [key, val] of Object.entries(respSchema.properties)) {
+            if (typeof val === 'object' && val !== null) {
+              tabContent += `<tr>
+                <td class="param-name">${escHtml(key)}</td>
+                <td class="param-type">${escHtml(val.type || '?')}</td>
+                <td class="param-desc">${escHtml(val.description || '') || '<span class="empty-text">-</span>'}</td>
+              </tr>`;
+            }
+          }
+          tabContent += '</tbody></table>';
+        }
+      }
+      tabContent += '</div>';
+      tabIdx++;
+    }
+    
+    html += `<div class="tab-bar">${tabHeaders}</div><div class="tab-panels">${tabContent}</div></div>`;
+  }
+  
+  // Body examples
+  if (a.body_examples && Object.keys(a.body_examples).length > 0) {
+    html += '<div class="examples-section">';
+    html += '<h3>📝 请求示例</h3>';
+    for (const [name, example] of Object.entries(a.body_examples)) {
+      html += `<h4>${escHtml(name)}</h4>`;
+      html += `<pre class="json-block"><code>${escapeJson(JSON.stringify(example, null, 2))}</code></pre>`;
+      html += `<button class="copy-btn" onclick="copyText(this, \`${escapeForJs(JSON.stringify(example, null, 2))}\`)">📋 复制</button>`;
+    }
+    html += '</div>';
+  }
+  
+  return html;
+}
+
+// ===== 工具 =====
+function escapeJson(str) {
+  return escHtml(str);
+}
+
+function escapeForJs(str) {
+  return str.replace(/\\/g,'\\\\').replace(/`/g,'\\`').replace(/\$/g,'\\$');
+}
+
+function copyText(btn, text) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = '✅ 已复制';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+  }).catch(() => toast('复制失败'));
+}
+
+function switchTab(btn, panelId) {
+  const tabBar = btn.closest('.detail-tabs');
+  tabBar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  tabBar.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById(panelId).classList.add('active');
+}
+
+// ===== 初始化 =====
+let apis = [];
+
+async function init() {
+  try {
+    const resp = await fetch('data/apis.json?t=' + Date.now());
+    const raw = await resp.json();
+    // Add unique id and flatten groups
+    apis = raw.map((a, i) => ({
+      ...a,
+      _id: 'api_' + i,
+      _groupLevel: a.group.split('/').length
+    }));
+    document.getElementById('total-apis').textContent = apis.length;
+  } catch(e) {
+    document.getElementById('welcome').innerHTML = `<div class="error">加载数据失败: ${e.message}<br>请确保 apis.json 在同一目录下</div>`;
+    return;
+  }
+  
+  // Populate filter
+  const filterEl = document.getElementById('filter');
+  const cats = [...new Set(apis.map(a => a.group.split('/')[0]))].sort();
+  cats.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c;
+    opt.textContent = GROUP_MAP[c] || c;
+    filterEl.appendChild(opt);
+  });
+  
+  renderSidebar();
+  renderQuickCategories();
+  renderApiList('');
+}
+
+// Close search dropdown on outside click
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#search-box')) {
+    document.getElementById('search-results').innerHTML = '';
+  }
+});
+
+// Handle hash routing
+window.addEventListener('hashchange', () => {
+  const id = window.location.hash.slice(1);
+  if (id.startsWith('api_')) {
+    navigateToApi(id);
+  } else {
+    navigateToWelcome();
+  }
+});
+
+init();
+</script>
+</body>
+</html>
